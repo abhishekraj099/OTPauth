@@ -11,11 +11,21 @@ const errorHandler = require('./middleware/errorHandler');
 const authRoutes = require('./routes/auth.routes');
 
 const app = express();
+if (process.env.NODE_ENV === 'production') {
+	app.set('trust proxy', 1);
+}
+
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map((origin) => origin.trim()).filter(Boolean) || [];
 
 app.use(helmet());
 app.use(compression());
 app.use(cors({
-	origin: config.app.allowedOrigins,
+	origin: (origin, callback) => {
+		if (!origin || allowedOrigins.includes(origin)) {
+			return callback(null, true);
+		}
+		return callback(new Error('Not allowed by CORS'));
+	},
 	credentials: true,
 	methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 }));
@@ -37,6 +47,7 @@ const swaggerOptions = {
 };
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerJsdoc(swaggerOptions)));
+app.get('/', (req, res) => res.send('API is running 🚀'));
 app.get('/health', (req, res) => res.json({ status: 'ok', env: config.env, timestamp: new Date() }));
 app.use('/api/v1/auth', authRoutes);
 app.use(errorHandler);

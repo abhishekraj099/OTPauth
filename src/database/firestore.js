@@ -1,6 +1,4 @@
 const admin = require('firebase-admin');
-const fs = require('fs');
-const path = require('path');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -12,27 +10,20 @@ const initFirebase = () => {
     return admin.app();
   }
 
-  const serviceAccountPath = config.firebase.serviceAccountPath;
   let credential;
-  let projectId = config.firebase.projectId;
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
-  if (serviceAccountPath) {
-    const resolvedPath = path.resolve(serviceAccountPath);
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Firebase service account file not found at ${resolvedPath}`);
-    }
-    const serviceAccount = require(resolvedPath);
-    credential = admin.credential.cert(serviceAccount);
-    projectId = projectId || serviceAccount.project_id;
-  } else if (config.firebase.clientEmail && config.firebase.privateKey) {
-    credential = admin.credential.cert({
-      projectId,
-      clientEmail: config.firebase.clientEmail,
-      privateKey: config.firebase.privateKey,
-    });
-  } else {
-    credential = admin.credential.applicationDefault();
+  if (!projectId || !clientEmail || !privateKey) {
+    throw new Error('Missing Firebase configuration');
   }
+
+  credential = admin.credential.cert({
+    projectId,
+    clientEmail,
+    privateKey,
+  });
 
   admin.initializeApp({ credential, projectId });
   admin.firestore().settings({ ignoreUndefinedProperties: true });
