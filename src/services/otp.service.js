@@ -13,48 +13,55 @@ const otpsCollection = () => getDb().collection('otps');
 const getOtpRef = (email) => otpsCollection().doc(normalizeEmail(email));
 
 const createOtp = async ({ email, ipAddress, userAgent }) => {
-  const otpRef = getOtpRef(email);
-  const snapshot = await otpRef.get();
-  const existing = snapshot.exists ? snapshot.data() : null;
-  const existingExpiresAt = existing?.expiresAt?.toDate?.() || null;
-  const hasActiveOtp = Boolean(existing && !existing.isUsed && (!existingExpiresAt || existingExpiresAt > new Date()));
+  try {
+    const otpRef = getOtpRef(email);
+    const snapshot = await otpRef.get();
+    const existing = snapshot.exists ? snapshot.data() : null;
+    const existingExpiresAt = existing?.expiresAt?.toDate?.() || null;
+    const hasActiveOtp = Boolean(existing && !existing.isUsed && (!existingExpiresAt || existingExpiresAt > new Date()));
 
-  if (existing && !hasActiveOtp && existingExpiresAt && existingExpiresAt <= new Date()) {
-    await otpRef.delete();
-  }
-
-  if (hasActiveOtp) {
-    const createdAtMs = existing.createdAtMs || (existing.createdAt?.toDate?.().getTime() || 0);
-    const cooldownMs = config.otp.resendCooldown * 1000;
-    const timeSinceCreated = Date.now() - createdAtMs;
-    if (timeSinceCreated < cooldownMs) {
-      const waitSecs = Math.ceil((cooldownMs - timeSinceCreated) / 1000);
-      throw new ApiError(429, `Please wait ${waitSecs}s before requesting a new OTP`);
+    if (existing && !hasActiveOtp && existingExpiresAt && existingExpiresAt <= new Date()) {
+      await otpRef.delete();
     }
-    if ((existing.resendCount || 0) >= 5) {
-      throw new ApiError(429, 'Too many OTP requests. Try again after the current OTP expires.');
+
+    if (hasActiveOtp) {
+      const createdAtMs = existing.createdAtMs || (existing.createdAt?.toDate?.().getTime() || 0);
+      const cooldownMs = config.otp.resendCooldown * 1000;
+      const timeSinceCreated = Date.now() - createdAtMs;
+      if (timeSinceCreated < cooldownMs) {
+        const waitSecs = Math.ceil((cooldownMs - timeSinceCreated) / 1000);
+        throw new ApiError(429, `Please wait ${waitSecs}s before requesting a new OTP`);
+      }
+      if ((existing.resendCount || 0) >= 5) {
+        throw new ApiError(429, 'Too many OTP requests. Try again after the current OTP expires.');
+      }
     }
+
+    console.log('Generating OTP for:', email);
+    const otp = generateOtp();
+    const otpHash = await hashOtp(otp);
+    const expiresAt = new Date(Date.now() + config.otp.expiryMinutes * 60 * 1000);
+    const resendCount = hasActiveOtp ? (existing.resendCount || 0) + 1 : 0;
+
+    await otpRef.set({
+      email: normalizeEmail(email),
+      otpHash,
+      expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAtMs: Date.now(),
+      isUsed: false,
+      attempts: 0,
+      resendCount,
+      ipAddress,
+      userAgent,
+    });
+
+    console.log('OTP saved successfully for:', email);
+    return otp;
+  } catch (error) {
+    console.error('OTP SERVICE ERROR:', error);
+    throw error;
   }
-
-  const otp = generateOtp();
-  const otpHash = await hashOtp(otp);
-  const expiresAt = new Date(Date.now() + config.otp.expiryMinutes * 60 * 1000);
-  const resendCount = hasActiveOtp ? (existing.resendCount || 0) + 1 : 0;
-
-  await otpRef.set({
-    email: normalizeEmail(email),
-    otpHash,
-    expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    createdAtMs: Date.now(),
-    isUsed: false,
-    attempts: 0,
-    resendCount,
-    ipAddress,
-    userAgent,
-  });
-
-  return otp;
 };
 
 const verifyOtp = async ({ email, otp }) => {

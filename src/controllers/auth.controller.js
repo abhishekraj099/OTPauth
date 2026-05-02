@@ -34,81 +34,107 @@ exports.sendOtp = asyncHandler(async (req, res) => {
   const { ip, userAgent } = getDeviceInfo(req);
   const otp = await createOtp({ email, ipAddress: ip, userAgent });
   try {
+    console.log('Sending OTP email to:', email);
     await sendOtpEmail({ to: email, otp });
-  } catch (err) {
+  } catch (error) {
+    console.error('EMAIL SEND ERROR:', error);
     await deleteOtp(email);
-    throw err;
+    console.error('SEND OTP ERROR:', {
+      message: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+    });
   }
   await logEvent({ email: normalizeEmail(email), event: 'OTP_SENT', ipAddress: ip, userAgent });
   res.status(200).json(new ApiResponse(200, { email }, 'OTP sent to your email'));
 });
 
 exports.verifyOtp = asyncHandler(async (req, res) => {
-  const { email, otp } = req.body;
-  const { ip, userAgent } = getDeviceInfo(req);
-  await verifyOtp({ email, otp });
+  try {
+    const { email, otp } = req.body;
+    const { ip, userAgent } = getDeviceInfo(req);
+    await verifyOtp({ email, otp });
 
-  const emailKey = normalizeEmail(email);
-  const userRef = usersCollection().doc(emailKey);
-  const userSnap = await userRef.get();
-  const isNewUser = !userSnap.exists;
+    const emailKey = normalizeEmail(email);
+    const userRef = usersCollection().doc(emailKey);
+    const userSnap = await userRef.get();
+    const isNewUser = !userSnap.exists;
 
-  if (!userSnap.exists) {
-    await userRef.set({
-      email: emailKey,
-      isEmailVerified: true,
-      isActive: true,
-      isDeleted: false,
-      loginCount: 0,
-      metadata: { registeredIp: ip, userAgent },
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    if (!userSnap.exists) {
+      await userRef.set({
+        email: emailKey,
+        isEmailVerified: true,
+        isActive: true,
+        isDeleted: false,
+        loginCount: 0,
+        metadata: { registeredIp: ip, userAgent },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } else {
+      const existing = userSnap.data();
+      const metadata = { ...(existing.metadata || {}), lastLoginIp: ip, userAgent };
+      await userRef.set({
+        isEmailVerified: true,
+        lastLoginAt: admin.firestore.Timestamp.fromDate(new Date()),
+        loginCount: admin.firestore.FieldValue.increment(1),
+        metadata,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    const refreshedSnap = await userRef.get();
+    const user = serializeUser(refreshedSnap);
+
+    const accessToken = generateAccessToken({ id: user.id, email: user.email });
+    const refreshToken = await createSession(user.id, { ip, userAgent });
+
+    await logEvent({
+      userId: user.id,
+      email: user.email,
+      event: 'LOGIN_SUCCESS',
+      ipAddress: ip,
+      userAgent,
+      metadata: { isNewUser },
     });
-  } else {
-    const existing = userSnap.data();
-    const metadata = { ...(existing.metadata || {}), lastLoginIp: ip, userAgent };
-    await userRef.set({
-      isEmailVerified: true,
-      lastLoginAt: admin.firestore.Timestamp.fromDate(new Date()),
-      loginCount: admin.firestore.FieldValue.increment(1),
-      metadata,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+
+    res.status(200).json(new ApiResponse(200,
+      { accessToken, refreshToken, user, isNewUser },
+      isNewUser ? 'Account created and logged in' : 'Login successful'
+    ));
+  } catch (error) {
+    console.error('VERIFY OTP ERROR:', error);
+    throw error;
   }
-
-  const refreshedSnap = await userRef.get();
-  const user = serializeUser(refreshedSnap);
-
-  const accessToken = generateAccessToken({ id: user.id, email: user.email });
-  const refreshToken = await createSession(user.id, { ip, userAgent });
-
-  await logEvent({
-    userId: user.id,
-    email: user.email,
-    event: 'LOGIN_SUCCESS',
-    ipAddress: ip,
-    userAgent,
-    metadata: { isNewUser },
-  });
-
-  res.status(200).json(new ApiResponse(200,
-    { accessToken, refreshToken, user, isNewUser },
-    isNewUser ? 'Account created and logged in' : 'Login successful'
-  ));
 });
 
 exports.refreshToken = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
-  if (!refreshToken) throw new ApiError(400, 'Refresh token required');
-  const data = await refreshAccessToken(refreshToken);
-  res.status(200).json(new ApiResponse(200, data, 'Token refreshed'));
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) throw new ApiError(400, 'Refresh token required');
+    const data = await refreshAccessToken(refreshToken);
+    res.status(200).json(new ApiResponse(200, data, 'Token refreshed'));
+  } catch (error) {
+    console.error('REFRESH TOKEN ERROR:', error);
+    throw error;
+  }
 });
 
 exports.logout = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
-  if (refreshToken) await revokeSession(refreshToken);
-  await logEvent({ userId: req.user?.id, event: 'LOGOUT', ipAddress: req.ip });
-  res.status(200).json(new ApiResponse(200, {}, 'Logged out successfully'));
+  try {
+    const { refreshToken } = req.body;
+    if (refreshToken) await revokeSession(refreshToken);
+    await logEvent({ userId: req.user?.id, event: 'LOGOUT', ipAddress: req.ip });
+    res.status(200).json(new ApiResponse(200, {}, 'Logged out successfully'));
+  } catch (error) {
+    console.error('LOGOUT ERROR:', error);
+    throw error;
+  }
 });
 
 exports.logoutAll = asyncHandler(async (req, res) => {

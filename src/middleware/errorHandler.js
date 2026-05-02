@@ -2,6 +2,13 @@ const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 
 const errorHandler = (err, req, res, next) => {
+  console.error('GLOBAL ERROR:', {
+    message: err.message,
+    stack: err.stack,
+    url: req.originalUrl,
+    method: req.method,
+    timestamp: new Date().toISOString(),
+  });
   logger.error(err.message, { stack: err.stack, url: req.url });
 
   if (err instanceof ApiError) {
@@ -18,7 +25,11 @@ const errorHandler = (err, req, res, next) => {
   if (err.code === 11000) {
     return res.status(409).json({ success: false, message: 'Duplicate entry' });
   }
-  res.status(500).json({ success: false, message: 'Internal server error', timestamp: new Date().toISOString() });
+  res.status(err.statusCode || 500).json({
+    success: false,
+    message: err.message || 'Internal server error',
+    timestamp: new Date().toISOString(),
+  });
 };
 
 module.exports = errorHandler;
