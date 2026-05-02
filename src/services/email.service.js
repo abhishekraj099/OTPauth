@@ -5,11 +5,23 @@ const config = require('../config');
 const logger = require('../utils/logger');
 
 const transporter = nodemailer.createTransport({
-  host: config.email.host,
-  port: config.email.port,
-  secure: config.email.port === 465,
-  auth: { user: config.email.user, pass: config.email.pass },
+  host: process.env.EMAIL_HOST,
+  port: Number(process.env.EMAIL_PORT),
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false,
+  },
 });
+
+(async () => {
+  await transporter.verify()
+    .then(() => console.log("SMTP connection verified"))
+    .catch(err => console.error("SMTP VERIFY ERROR:", err));
+})();
 
 const templatePath = path.resolve(__dirname, '..', 'templates', 'otp-email.html');
 const templateHtml = fs.readFileSync(templatePath, 'utf8');
@@ -29,16 +41,20 @@ const renderOtpTemplate = (otp, expiryMins) => {
 
 const sendOtpEmail = async ({ to, otp }) => {
   try {
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: config.email.from,
       to,
       subject: `${otp} is your ${config.app.name} login code`,
       html: renderOtpTemplate(otp, config.otp.expiryMinutes),
     });
-    logger.info(`OTP email sent to ${to}`);
-  } catch (err) {
-    logger.error('Email send error:', err.message);
-    throw new Error('Email delivery failed');
+    console.log("EMAIL SENT SUCCESS:", info.response);
+    return info;
+  } catch (error) {
+    console.error("🔥 REAL EMAIL ERROR FULL:", error);
+    console.error("🔥 ERROR MESSAGE:", error.message);
+    console.error("🔥 ERROR RESPONSE:", error.response);
+    console.error("🔥 ERROR CODE:", error.code);
+    throw error; // DO NOT replace with custom error
   }
 };
 
